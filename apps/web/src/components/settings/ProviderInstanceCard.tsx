@@ -1144,7 +1144,8 @@ export function ProviderInstanceCard({
           environment={genericEnvironment}
           onChange={updateGenericEnvironment}
         />
-        {environmentId !== undefined && liveProvider?.driver === "acpRegistry" ? (
+        {environmentId !== undefined &&
+        (liveProvider?.driver === "acpRegistry" || liveProvider?.nativeSessions !== undefined) ? (
           <AcpSessionManagementSection
             environmentId={environmentId}
             instanceId={instanceId}

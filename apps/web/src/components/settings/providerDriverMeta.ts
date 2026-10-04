@@ -4,6 +4,7 @@ import {
   ClaudeSettings,
   CodexSettings,
   CursorSettings,
+  DevinSettings,
   GrokSettings,
   OpenCodeSettings,
   PiSettings,
@@ -90,6 +91,11 @@ const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
     value: ProviderDriverKind.make("pi"),
     label: "Pi",
     settingsSchema: PiSettings,
+  },
+  {
+    value: ProviderDriverKind.make("devin"),
+    label: "Devin",
+    settingsSchema: DevinSettings,
   },
   {
     value: ProviderDriverKind.make("acpRegistry"),

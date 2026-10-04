@@ -89,6 +89,18 @@ export const DESCRIPTOR_PRESETS_BY_KIND: Partial<
   [ProviderDriverKind.make("grok")]: [
     { id: "reasoningEffort", label: "Reasoning", type: "select", choices: EFFORT_CHOICES },
   ],
+  [ProviderDriverKind.make("devin")]: [
+    {
+      id: "thought_level",
+      label: "Thinking",
+      type: "select",
+      choices: [
+        { id: "medium", label: "Medium" },
+        { id: "high", label: "High" },
+        { id: "max", label: "Max", isDefault: true },
+      ],
+    },
+  ],
   [ProviderDriverKind.make("pi")]: [
     {
       id: "thinking",

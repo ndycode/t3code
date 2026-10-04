@@ -268,7 +268,7 @@ export function applyAcpRegistryLiveConfiguration(
   };
 }
 
-function applyAcpRegistryUrlAuthAction(
+export function applyAcpRegistryUrlAuthAction(
   provider: ServerProvider,
   action: Option.Option<NonNullable<ServerProvider["auth"]["action"]>>,
 ): ServerProvider {
