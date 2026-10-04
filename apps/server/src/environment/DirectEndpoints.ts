@@ -19,6 +19,8 @@ import * as Layer from "effect/Layer";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import * as NodeOS from "node:os";
 
+import { isPrivateNetworkHost } from "@t3tools/shared/hostClassification";
+
 import * as ServerConfig from "../config.ts";
 import { formatHostForUrl, isLoopbackHost, isWildcardHost } from "../startupAccess.ts";
 
@@ -31,13 +33,20 @@ export class DirectEndpoints extends Context.Service<
   }
 >()("t3/environment/DirectEndpoints") {}
 
-const isUsableAddress = (address: string): boolean =>
-  !address.startsWith("127.") && !address.startsWith("169.254.") && !address.startsWith("fe80:");
+/**
+ * Only private-network and tailnet addresses are reported. These routes are
+ * plain HTTP and carry the client's credential, so a public address would
+ * send it across the internet unencrypted.
+ */
+const isAdvertisableAddress = (address: string): boolean =>
+  !address.startsWith("127.") &&
+  !address.startsWith("169.254.") &&
+  (isTailscaleIpv4Address(address) || isPrivateNetworkHost(address));
 
 /**
- * Plain HTTP endpoints for the addresses a server bound to `host` accepts.
- * IPv4 only: link-local and temporary IPv6 addresses change too often to be
- * worth saving.
+ * Plain HTTP endpoints for the private addresses a server bound to `host`
+ * accepts. IPv4 only: link-local and temporary IPv6 addresses change too
+ * often to be worth saving.
  */
 export function resolveBoundEndpoints(input: {
   readonly host: string | undefined;
@@ -49,10 +58,11 @@ export function resolveBoundEndpoints(input: {
     ? Object.values(input.interfaces)
         .flatMap((entries) => entries ?? [])
         .filter(
-          (entry) => !entry.internal && entry.family === "IPv4" && isUsableAddress(entry.address),
+          (entry) =>
+            !entry.internal && entry.family === "IPv4" && isAdvertisableAddress(entry.address),
         )
         .map((entry) => entry.address)
-    : [input.host!];
+    : [input.host!].filter(isAdvertisableAddress);
   return [...new Set(addresses)].map((address) => ({
     kind: isTailscaleIpv4Address(address) ? "tailnet" : "lan",
     httpBaseUrl: `http://${formatHostForUrl(address)}:${input.port}/`,

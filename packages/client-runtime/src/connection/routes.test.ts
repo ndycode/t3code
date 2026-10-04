@@ -92,7 +92,7 @@ describe("learned routes", () => {
       reported: [{ httpBaseUrl: "http://192.168.1.10:3773/" }],
       allowInsecure: true,
     });
-    expect(ids(routes)).toEqual([`learned:${ENVIRONMENT_ID}:192.168.1.10:3773`, "relay"]);
+    expect(ids(routes)).toEqual([`learned:${ENVIRONMENT_ID}:http://192.168.1.10:3773`, "relay"]);
     expect(profileOf(routes![0]!)).toMatchObject({
       learned: true,
       authorization: "t3-connect",
@@ -119,7 +119,7 @@ describe("learned routes", () => {
       reported: [{ httpBaseUrl: "http://10.0.0.42:3773/" }],
       allowInsecure: true,
     });
-    expect(ids(moved)).toEqual([`learned:${ENVIRONMENT_ID}:10.0.0.42:3773`, "relay"]);
+    expect(ids(moved)).toEqual([`learned:${ENVIRONMENT_ID}:http://10.0.0.42:3773`, "relay"]);
   });
 
   it("leaves user routes alone and does not learn an address already saved", () => {
@@ -214,5 +214,57 @@ describe("learned routes", () => {
       alternateRoutes: learned.slice(1),
     };
     expect(gitHubRoutingConnectionKey(withLearned)).toBe(gitHubRoutingConnectionKey(relayOnly));
+  });
+
+  it("keeps the T3 Connect credential when learning over a learned T3 Connect route", () => {
+    const first = mergeLearnedRoutes({
+      entry: relayOnly,
+      activeRoute: RELAY,
+      reported: [{ httpBaseUrl: "http://192.168.1.10:3773/" }],
+      allowInsecure: true,
+    })!;
+    const learnedLan = first[0]!;
+    const entry: ConnectionCatalogEntry = {
+      ...relayOnly,
+      target: learnedLan.target,
+      profile: learnedLan.profile,
+      alternateRoutes: first.slice(1),
+    };
+    const next = mergeLearnedRoutes({
+      entry,
+      activeRoute: learnedLan,
+      reported: [
+        { httpBaseUrl: "http://192.168.1.10:3773/" },
+        { httpBaseUrl: "https://desk.tail1234.ts.net/" },
+      ],
+      allowInsecure: true,
+    })!;
+    for (const route of next.filter((candidate) => connectionRouteKind(candidate) !== "relay")) {
+      expect(profileOf(route)).toMatchObject({ authorization: "t3-connect" });
+      expect(connectionRouteId(route.target)).not.toContain("@");
+    }
+  });
+
+  it("saves a scheme change on the same host as a new address", () => {
+    const first = mergeLearnedRoutes({
+      entry: relayOnly,
+      activeRoute: RELAY,
+      reported: [{ httpBaseUrl: "http://desk.local:3773/" }],
+      allowInsecure: true,
+    })!;
+    const entry: ConnectionCatalogEntry = {
+      ...relayOnly,
+      target: first[0]!.target,
+      profile: first[0]!.profile,
+      alternateRoutes: first.slice(1),
+    };
+    const moved = mergeLearnedRoutes({
+      entry,
+      activeRoute: RELAY,
+      reported: [{ httpBaseUrl: "https://desk.local:3773/" }],
+      allowInsecure: true,
+    });
+    expect(moved).not.toBeNull();
+    expect(profileOf(moved![0]!)).toMatchObject({ httpBaseUrl: "https://desk.local:3773/" });
   });
 });

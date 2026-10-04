@@ -214,9 +214,17 @@ export function mergeLearnedRoutes(input: {
   if (active._tag !== "RelayConnectionTarget" && active._tag !== "BearerConnectionTarget") {
     return null;
   }
-  const authorization = active._tag === "RelayConnectionTarget" ? "t3-connect" : undefined;
+  // A route learned over another learned route inherits what that one uses:
+  // the T3 Connect credential, or the paired token it borrows.
+  const activeProfile = Option.getOrNull(input.activeRoute.profile);
+  const authorization =
+    active._tag === "RelayConnectionTarget" ||
+    (activeProfile?._tag === "BearerConnectionProfile" &&
+      activeProfile.authorization === "t3-connect")
+      ? ("t3-connect" as const)
+      : undefined;
   const sharedCredential =
-    active._tag === "BearerConnectionTarget"
+    authorization === undefined && active._tag === "BearerConnectionTarget"
       ? credentialConnectionId(active.connectionId)
       : undefined;
 
@@ -245,7 +253,7 @@ export function mergeLearnedRoutes(input: {
     known.add(normalized(httpBaseUrl));
     const connectionId = learnedConnectionId(
       entry.target.environmentId,
-      url.host,
+      url.origin,
       sharedCredential,
     );
     next = insertRoute(next, {
@@ -267,9 +275,12 @@ export function mergeLearnedRoutes(input: {
       ),
     });
   }
-  const before = saved.map((route) => connectionRouteId(route.target)).join("\n");
-  const after = next.map((route) => connectionRouteId(route.target)).join("\n");
-  return before === after ? null : next;
+  // Compare addresses too: a scheme or port change keeps no id stable.
+  const signature = (routes: ReadonlyArray<ConnectionRoute>) =>
+    routes
+      .map((route) => `${connectionRouteId(route.target)} ${routeHttpBaseUrl(route) ?? ""}`)
+      .join("\n");
+  return signature(saved) === signature(next) ? null : next;
 }
 
 /**
@@ -278,17 +289,19 @@ export function mergeLearnedRoutes(input: {
  */
 function learnedConnectionId(
   environmentId: string,
-  host: string,
+  origin: string,
   sharedCredential: string | undefined,
 ): string {
   return sharedCredential === undefined
-    ? `learned:${environmentId}:${host}`
-    : `learned:${environmentId}:${host}@${sharedCredential}`;
+    ? `learned:${environmentId}:${origin}`
+    : `learned:${environmentId}:${origin}@${sharedCredential}`;
 }
 
 /** The connection id whose stored credential a bearer route uses. */
 export function credentialConnectionId(connectionId: string): string {
-  const at = connectionId.lastIndexOf("@");
+  // The borrowed id follows the first "@"; neither an environment id nor an
+  // origin contains one.
+  const at = connectionId.indexOf("@");
   return connectionId.startsWith("learned:") && at !== -1
     ? connectionId.slice(at + 1)
     : connectionId;

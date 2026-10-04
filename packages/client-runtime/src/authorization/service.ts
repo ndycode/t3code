@@ -496,7 +496,8 @@ export const make = Effect.gen(function* () {
       }
       // An unreachable direct address says nothing about the token, so keep
       // it for the T3 Connect route rather than forcing a relay round trip.
-      if (endpoint !== undefined) {
+      // A rejected token falls through and is replaced like on the tunnel.
+      if (endpoint !== undefined && cachedSocket.failure._tag !== "EnvironmentAuthInvalidError") {
         return yield* mapDpopSocketError(cachedSocket.failure);
       }
       selected = yield* getDpopToken({

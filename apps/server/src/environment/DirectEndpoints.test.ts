@@ -33,6 +33,16 @@ const INTERFACES: ReturnType<typeof NodeOS.networkInterfaces> = {
       scopeid: 4,
     },
   ],
+  en1: [
+    {
+      address: "203.0.113.20",
+      netmask: "255.255.255.0",
+      family: "IPv4",
+      mac: "aa:bb:cc:dd:ee:00",
+      internal: false,
+      cidr: "203.0.113.20/24",
+    },
+  ],
   utun4: [
     {
       address: "100.101.102.103",
@@ -66,5 +76,11 @@ describe("resolveBoundEndpoints", () => {
     expect(
       resolveBoundEndpoints({ host: "100.101.102.103", port: 3773, interfaces: INTERFACES }),
     ).toEqual([{ kind: "tailnet", httpBaseUrl: "http://100.101.102.103:3773/" }]);
+  });
+
+  it("never reports a public address, which would carry the credential over plain HTTP", () => {
+    expect(
+      resolveBoundEndpoints({ host: "203.0.113.20", port: 3773, interfaces: INTERFACES }),
+    ).toEqual([]);
   });
 });

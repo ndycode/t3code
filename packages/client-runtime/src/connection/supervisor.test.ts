@@ -2045,7 +2045,7 @@ describe("EnvironmentSupervisor routes", () => {
         "BearerConnectionTarget",
       );
       expect(yield* Ref.get(learned)).toEqual([
-        `learned:${TARGET.environmentId}:192.168.1.10:3773`,
+        `learned:${TARGET.environmentId}:http://192.168.1.10:3773`,
       ]);
     }),
   );
