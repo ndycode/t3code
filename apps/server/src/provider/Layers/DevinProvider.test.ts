@@ -48,11 +48,11 @@ const makeProbeResult = (probe: Schema.Schema.Type<typeof AcpRegistryProbeResult
 describe("parseDevinAuthStatusOutput", () => {
   it("parses a signed-in account with its email", () => {
     const parsed = parseDevinAuthStatusOutput(
-      ["Logged in via Devin", "User: neil", "Email: neil@getmysched.com", "Tier: Devin Max"].join(
+      ["Logged in via Devin", "User: test", "Email: user@example.com", "Tier: Devin Max"].join(
         "\n",
       ),
     );
-    assert.deepEqual(parsed, { status: "authenticated", email: "neil@getmysched.com" });
+    assert.deepEqual(parsed, { status: "authenticated", email: "user@example.com" });
   });
 
   it("parses a signed-in account without an email field", () => {
@@ -132,7 +132,7 @@ describe("buildDevinBaseSnapshot", () => {
     });
   });
 
-  it("hides session list and delete for the cloud transport", () => {
+  it("hides native session management for the cloud transport", () => {
     const snapshot = buildDevinBaseSnapshot({
       ...baseInput,
       settings: decodeDevinSettings({ enabled: true, cloud: true }),
@@ -140,10 +140,15 @@ describe("buildDevinBaseSnapshot", () => {
     });
     assert.deepEqual(snapshot.nativeSessions, {
       canList: false,
-      canLoad: true,
-      canResume: true,
+      canLoad: false,
+      canResume: false,
       canDelete: false,
     });
+    assert.isFalse(snapshot.configurableProviders);
+    // The management-section logout targets the local session database and
+    // stays hidden in cloud mode; account sign-out remains via
+    // `setup.canAuthenticate`.
+    assert.isUndefined(snapshot.auth.canLogout);
   });
 
   it("defaults canLogout to the authenticated state without a probe", () => {

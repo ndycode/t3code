@@ -1,7 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 
+import type * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
 import {
   buildDevinAcpSpawnInput,
+  devinAcpCatalog,
   devinAcpRegistrySettings,
   devinAcpSpawnArgs,
 } from "./DevinAcpSupport.ts";
@@ -61,4 +64,34 @@ describe("devinAcpRegistrySettings", () => {
     expect(settings.agentId).toBe("devin");
     expect(settings.commandPath).toBe("/opt/devin/bin/devin");
   });
+});
+
+describe("devinAcpCatalog", () => {
+  const stubResolved = {
+    agent: { id: "devin" },
+    distribution: "binary",
+    spawn: { command: "devin", args: ["acp"], cwd: "/tmp/project" },
+  } as unknown as AcpRegistrySupport.ResolvedAcpRegistryAgent;
+  const stubCatalog = {
+    resolve: () => Effect.succeed(stubResolved),
+  } as unknown as AcpRegistrySupport.AcpRegistryCatalog["Service"];
+
+  it("returns the base catalog unchanged for local mode", () => {
+    expect(devinAcpCatalog(stubCatalog, { cloud: false })).toBe(stubCatalog);
+  });
+
+  it.effect("appends --cloud to the resolved devin spawn in cloud mode", () =>
+    Effect.gen(function* () {
+      const catalog = devinAcpCatalog(stubCatalog, { cloud: true });
+      const resolved = yield* catalog.resolve(
+        devinAcpRegistrySettings({ binaryPath: "" }),
+        "/tmp/project",
+      );
+      expect(resolved.spawn).toEqual({
+        command: "devin",
+        args: ["acp", "--cloud"],
+        cwd: "/tmp/project",
+      });
+    }),
+  );
 });

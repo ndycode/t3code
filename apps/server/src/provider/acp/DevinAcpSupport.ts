@@ -7,6 +7,7 @@ import type * as Scope from "effect/Scope";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import type * as EffectAcpErrors from "effect-acp/errors";
 
+import type * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
 
 export const DEVIN_ACP_AGENT_ID = "devin";
@@ -73,11 +74,45 @@ export const makeDevinAcpRuntime = (
  * they already do for registry-installed Devin instances — no Devin-specific
  * duplicate of that machinery.
  */
+const decodeAcpRegistrySettings = Schema.decodeSync(AcpRegistrySettings);
+
 export function devinAcpRegistrySettings(
   devinSettings: Pick<DevinSettings, "binaryPath">,
 ): AcpRegistrySettings {
-  return Schema.decodeSync(AcpRegistrySettings)({
+  return decodeAcpRegistrySettings({
     agentId: DEVIN_ACP_AGENT_ID,
     commandPath: devinSettings.binaryPath || "devin",
   });
+}
+
+/**
+ * The registry helpers above resolve their spawn through
+ * `AcpRegistryCatalog.resolve`, which takes its args from the registry
+ * distribution (`devin acp`). In Devin Cloud mode those same helpers must
+ * target `devin acp --cloud`, so the Devin driver injects this decorated
+ * catalog that rewrites the resolved spawn to match the orchestration
+ * transport.
+ */
+export function devinAcpCatalog(
+  catalog: AcpRegistrySupport.AcpRegistryCatalog["Service"],
+  devinSettings: Pick<DevinSettings, "cloud">,
+): AcpRegistrySupport.AcpRegistryCatalog["Service"] {
+  if (!devinSettings.cloud) return catalog;
+  return {
+    ...catalog,
+    resolve: (settings, cwd, environment) =>
+      catalog.resolve(settings, cwd, environment).pipe(
+        Effect.map((resolved) =>
+          settings.agentId === DEVIN_ACP_AGENT_ID
+            ? {
+                ...resolved,
+                spawn: {
+                  ...resolved.spawn,
+                  args: [...resolved.spawn.args, "--cloud"],
+                },
+              }
+            : resolved,
+        ),
+      ),
+  };
 }

@@ -27,7 +27,6 @@ import * as ServerSettings from "../../serverSettings.ts";
 import type { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import {
-  buildInitialDevinProviderSnapshot,
   checkDevinProviderReadiness,
   checkDevinProviderStatus,
   DEVIN_DRIVER_KIND,
@@ -65,7 +64,7 @@ import * as AcpRegistrySupport from "../acp/AcpRegistrySupport.ts";
 import * as AcpRegistryRuntimeCoordinator from "../acp/AcpRegistryRuntimeCoordinator.ts";
 import * as AcpRegistryAuth from "../acp/AcpRegistryAuth.ts";
 import * as AcpRegistryAuthenticationState from "../acp/AcpRegistryAuthenticationState.ts";
-import { devinAcpRegistrySettings } from "../acp/DevinAcpSupport.ts";
+import { devinAcpCatalog, devinAcpRegistrySettings } from "../acp/DevinAcpSupport.ts";
 import {
   applyAcpRegistryAvailableCommands,
   applyAcpRegistryLiveConfiguration,
@@ -182,9 +181,12 @@ export const DevinDriver: ProviderDriver<DevinSettings, DevinDriverEnv> = {
         ),
       );
       // Auth, session-management, and configuration probing reuse the
-      // registry's agent-agnostic ACP helpers, resolved to the local devin
-      // binary through a synthesized registry entry.
+      // registry's agent-agnostic ACP helpers, resolved to the devin binary
+      // through a synthesized registry entry. The decorated catalog keeps
+      // their spawn on the same transport as orchestration threads: plain
+      // `devin acp` locally, `devin acp --cloud` in Devin Cloud mode.
       const acpSettings = devinAcpRegistrySettings(effectiveConfig);
+      const acpCatalog = devinAcpCatalog(catalog, effectiveConfig);
       const orchestrationAdapter = yield* DevinAdapterV2Driver.create({
         instanceId,
         displayName,
@@ -263,7 +265,7 @@ export const DevinDriver: ProviderDriver<DevinSettings, DevinDriverEnv> = {
           environment: processEnvironment,
         }),
       ).pipe(
-        Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
+        Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, acpCatalog),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(Crypto.Crypto, crypto),
       );
@@ -287,7 +289,9 @@ export const DevinDriver: ProviderDriver<DevinSettings, DevinDriverEnv> = {
           if (
             cached !== null &&
             cached.expiresAt > now &&
-            cached.provider.version === baseSnapshot.version
+            cached.provider.version === baseSnapshot.version &&
+            cached.provider.auth.status === baseSnapshot.auth.status &&
+            baseSnapshot.status !== "error"
           ) {
             return {
               provider: { ...cached.provider, checkedAt: baseSnapshot.checkedAt },
@@ -432,7 +436,7 @@ export const DevinDriver: ProviderDriver<DevinSettings, DevinDriverEnv> = {
         >,
       ): Effect.Effect<A, E> => {
         const provided = effect.pipe(
-          Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
+          Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, acpCatalog),
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Effect.provideService(Crypto.Crypto, crypto),
         );
@@ -466,7 +470,7 @@ export const DevinDriver: ProviderDriver<DevinSettings, DevinDriverEnv> = {
               Effect.asVoid,
             ),
       }).pipe(
-        Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
+        Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, acpCatalog),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(Crypto.Crypto, crypto),
       );
@@ -567,7 +571,7 @@ export const DevinDriver: ProviderDriver<DevinSettings, DevinDriverEnv> = {
                     cwd,
                     environment: processEnvironment,
                   }).pipe(
-                    Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
+                    Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, acpCatalog),
                     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
                     Effect.provideService(Crypto.Crypto, crypto),
                     Effect.tap(() => confirmedAuthentication.set(false)),
@@ -588,6 +592,7 @@ export const DevinDriver: ProviderDriver<DevinSettings, DevinDriverEnv> = {
                         ),
                       ),
                     ),
+                    Effect.tap(() => snapshot.refresh),
                   );
                   return Option.isSome(runtimeCoordinator)
                     ? logout.pipe(

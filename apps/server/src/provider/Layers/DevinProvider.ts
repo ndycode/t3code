@@ -164,10 +164,16 @@ export function buildDevinBaseSnapshot(
     status: input.settings.enabled ? input.status : "disabled",
     auth: {
       ...input.auth,
-      canLogout:
-        input.auth.canLogout ??
-        input.probe?.probe.sessionManagement.canLogout ??
-        input.auth.status === "authenticated",
+      // Session-management logout is local-only (the session database does
+      // not exist on the cloud transport). Leaving `canLogout` unset in
+      // cloud mode hides the management "Log out" action while the
+      // authentication section still offers "Sign out" through
+      // `setup.canAuthenticate`.
+      canLogout: cloudTransport
+        ? undefined
+        : (input.auth.canLogout ??
+          input.probe?.probe.sessionManagement.canLogout ??
+          input.auth.status === "authenticated"),
     },
     checkedAt: input.checkedAt,
     setup: {
@@ -182,11 +188,12 @@ export function buildDevinBaseSnapshot(
       : {
           nativeSessions: {
             canList: input.probe.probe.sessionManagement.canList && !cloudTransport,
-            canLoad: input.probe.probe.sessionManagement.canLoad,
-            canResume: input.probe.probe.sessionManagement.canResume,
+            canLoad: input.probe.probe.sessionManagement.canLoad && !cloudTransport,
+            canResume: input.probe.probe.sessionManagement.canResume && !cloudTransport,
             canDelete: input.probe.probe.sessionManagement.canDelete && !cloudTransport,
           },
-          configurableProviders: input.probe.probe.sessionManagement.canConfigureProviders,
+          configurableProviders:
+            input.probe.probe.sessionManagement.canConfigureProviders && !cloudTransport,
         }),
     slashCommands: input.probe?.slashCommands ?? [],
     skills: input.probe?.skills ?? [],
@@ -351,20 +358,16 @@ export const checkDevinProviderStatus = Effect.fn("DevinProvider.checkProviderSt
   probe: () => Effect.Effect<AcpRegistryConfigurationProbeResult, AcpRegistryOperationError, R>,
 ): Effect.fn.Return<ServerProvider, never, ChildProcessSpawner.ChildProcessSpawner | R> {
   const readiness = yield* checkDevinProviderReadiness(input);
-  if (!readiness.installed || readiness.status === "disabled") {
+  if (!readiness.installed || readiness.status === "disabled" || readiness.status === "error") {
     return readiness;
   }
   const probed = yield* probe().pipe(Effect.result);
   if (Result.isFailure(probed)) {
     return {
       ...readiness,
-      status: readiness.auth.status === "unauthenticated" ? readiness.status : "warning",
-      ...(readiness.auth.status === "unauthenticated"
-        ? {}
-        : {
-            message:
-              "Devin CLI is installed but the ACP configuration probe failed. Model options may be incomplete.",
-          }),
+      status: "warning",
+      message:
+        "Devin CLI is installed but the ACP configuration probe failed. Model options may be incomplete.",
     };
   }
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
@@ -373,7 +376,7 @@ export const checkDevinProviderStatus = Effect.fn("DevinProvider.checkProviderSt
     checkedAt,
     installed: readiness.installed,
     version: readiness.version,
-    status: "ready",
+    status: readiness.status,
     auth: readiness.auth,
     probe: probed.success,
   });
