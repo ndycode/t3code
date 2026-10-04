@@ -48,6 +48,7 @@ import {
   connectionRoutes,
   entryWithRoutes,
   findBearerRouteByUrl,
+  isLearned,
   mergeLearnedRoutes,
   routesAfterRemoving,
   upsertRoute,
@@ -236,7 +237,18 @@ export const make = Effect.gen(function* () {
     yield* Effect.forEach(
       persistedRoutesByEnvironment,
       Effect.fn("EnvironmentRegistry.loadCatalogEntry")(function* ([environmentId, targets]) {
-        const routes = yield* Effect.forEach(targets, loadRoute, { concurrency: "unbounded" });
+        const loaded = yield* Effect.forEach(targets, loadRoute, { concurrency: "unbounded" });
+        // A learned route without its profile has no address to reach; it is
+        // learned again on the next connection. A paired route keeps its slot
+        // so its missing profile still surfaces as a connection error.
+        const seen = new Set<string>();
+        const usable = loaded.filter((route) => {
+          const id = connectionRouteId(route.target);
+          if (seen.has(id)) return false;
+          seen.add(id);
+          return !(id.startsWith("learned:") && Option.isNone(route.profile));
+        });
+        const routes = usable.length > 0 ? usable : loaded.slice(0, 1);
         const first = routes[0]!;
         return [
           environmentId,
@@ -864,6 +876,16 @@ export const make = Effect.gen(function* () {
         });
         if (routes === null) return Option.none<ConnectionCatalogEntry>();
         const next = entryWithRoutes(entry, routes);
+        // A learned route owns its profile (address and authorization); the
+        // credential stays with the route it borrows from.
+        const previousIds = new Set(
+          connectionRoutes(entry).map((route) => connectionRouteId(route.target)),
+        );
+        for (const route of routes) {
+          if (!isLearned(route) || previousIds.has(connectionRouteId(route.target))) continue;
+          const profile = Option.getOrNull(route.profile);
+          if (profile !== null) yield* profiles.put(profile);
+        }
         yield* registrations.setRoutes(input.environmentId, persistedRoutes(next));
         // Update the lease in place: the live session already works, and
         // `installEntryLocked` would replace it for a route list change.
