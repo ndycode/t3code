@@ -273,6 +273,17 @@ export interface AcpAdapterV2Flavor {
     ) => Effect.Effect<EffectAcpSchema.WriteTextFileResponse, EffectAcpErrors.AcpError>;
   };
   /**
+   * When true, an "ask" runtime-policy disposition does not gate
+   * `terminal/create` ("deny" still applies). Set for agents whose session
+   * mode is the permission authority for terminal ops: they send routine
+   * commands directly and emit `session/request_permission` only per their
+   * own judgment, so gating every create on a prior permission request
+   * would deny legitimate commands in a retry loop. Devin sets this: its
+   * ask/accept-edits/smart/bypass modes decide internally which tools to
+   * call, and permission requests it does emit still surface normally.
+   */
+  readonly unguardedClientTerminals?: boolean;
+  /**
    * Permission requests that are really questions (Antigravity `interaction_*`
    * tool calls). Returns the question and a response builder; undefined routes
    * the request through the normal approval card.
@@ -1617,6 +1628,11 @@ export function makeAcpAdapterV2(
           yield* Ref.make<AcpSessionRuntime.AcpSessionRuntimeStartResult | null>(null);
         const activeSelection = yield* Ref.make<ModelSelection | null>(null);
         const activeInteractionMode = yield* Ref.make<ProviderInteractionMode | null>(null);
+        // Resolved `sessionModeForPolicy` output for the configured session.
+        // A runtime-mode-only change re-runs configureSession so flavors with
+        // in-session mode switching (Devin, Antigravity) re-apply their mapped
+        // session mode instead of keeping whatever the session opened with.
+        const activePolicyMode = yield* Ref.make<string | null>(null);
         const promptInstructionStates = yield* Ref.make(new Map<string, T3AcpInstructionState>());
         const runtimeRestartRequired = yield* Ref.make(false);
         const runtimeTeardownState = yield* Ref.make<AcpRuntimeTeardownState>({ _tag: "Idle" });
@@ -5389,7 +5405,9 @@ export function makeAcpAdapterV2(
             const disposition = acpClientExecuteDisposition(policy);
             if (
               disposition === "allow" ||
-              (disposition === "ask" && clientPolicyGrants.allowsExecute(turnKey))
+              (disposition === "ask" &&
+                (flavor.unguardedClientTerminals === true ||
+                  clientPolicyGrants.allowsExecute(turnKey)))
             ) {
               return Effect.void;
             }
@@ -6219,7 +6237,19 @@ export function makeAcpAdapterV2(
           }
           const policyMode = flavor.sessionModeForPolicy?.(runtimePolicy);
           if (policyMode !== undefined) {
-            yield* runtime.setMode(policyMode);
+            // Agents without any mode surface (Devin Cloud exposes neither
+            // `modes` nor a category:"mode" config option) reject the blind
+            // `mode` write setMode falls back to, which would wedge session
+            // open in retries; skip it and let the agent's default apply.
+            const prePolicyModeState = yield* runtime.getModeState;
+            const hasModeSurface =
+              prePolicyModeState !== undefined ||
+              configOptions.some(
+                (option) => option.category === "mode" && option.type === "select",
+              );
+            if (hasModeSurface) {
+              yield* runtime.setMode(policyMode);
+            }
           }
           const modeState = yield* runtime.getModeState;
           // The synthetic mode selection is skipped rather than failed when the
@@ -6312,6 +6342,10 @@ export function makeAcpAdapterV2(
         yield* configureSession(started, input.modelSelection, input.runtimePolicy);
         yield* Ref.set(activeSelection, input.modelSelection);
         yield* Ref.set(activeInteractionMode, input.runtimePolicy.interactionMode);
+        yield* Ref.set(
+          activePolicyMode,
+          flavor.sessionModeForPolicy?.(input.runtimePolicy) ?? null,
+        );
         const createdAt = yield* DateTime.now;
         const providerSession: OrchestrationV2ProviderSession = {
           id: input.providerSessionId,
@@ -6694,6 +6728,7 @@ export function makeAcpAdapterV2(
           yield* Ref.set(activeSessionSetup, null);
           yield* Ref.set(activeSelection, null);
           yield* Ref.set(activeInteractionMode, null);
+          yield* Ref.set(activePolicyMode, null);
           yield* Ref.set(snapshot, {
             order: [],
             messages: new Map(),
@@ -6732,13 +6767,20 @@ export function makeAcpAdapterV2(
               yield* configureSession(activated, turnInput.modelSelection, turnInput.runtimePolicy);
               yield* Ref.set(activeSelection, turnInput.modelSelection);
               yield* Ref.set(activeInteractionMode, turnInput.runtimePolicy.interactionMode);
+              yield* Ref.set(
+                activePolicyMode,
+                flavor.sessionModeForPolicy?.(turnInput.runtimePolicy) ?? null,
+              );
             } else {
               const configuredSelection = yield* Ref.get(activeSelection);
               const configuredInteractionMode = yield* Ref.get(activeInteractionMode);
+              const configuredPolicyMode = yield* Ref.get(activePolicyMode);
+              const nextPolicyMode = flavor.sessionModeForPolicy?.(turnInput.runtimePolicy) ?? null;
               if (
                 configuredSelection === null ||
                 !modelSelectionsEqual(configuredSelection, turnInput.modelSelection) ||
-                configuredInteractionMode !== turnInput.runtimePolicy.interactionMode
+                configuredInteractionMode !== turnInput.runtimePolicy.interactionMode ||
+                configuredPolicyMode !== nextPolicyMode
               ) {
                 const currentSessionSetup = yield* Ref.get(activeSessionSetup);
                 if (currentSessionSetup === null) {
@@ -6754,6 +6796,7 @@ export function makeAcpAdapterV2(
                 );
                 yield* Ref.set(activeSelection, turnInput.modelSelection);
                 yield* Ref.set(activeInteractionMode, turnInput.runtimePolicy.interactionMode);
+                yield* Ref.set(activePolicyMode, nextPolicyMode);
               }
             }
             yield* Ref.set(lastTurnRoute, {
@@ -7253,6 +7296,10 @@ export function makeAcpAdapterV2(
                     yield* configureSession(activated, nextSelection, nextRuntimePolicy);
                     yield* Ref.set(activeSelection, nextSelection);
                     yield* Ref.set(activeInteractionMode, nextRuntimePolicy.interactionMode);
+                    yield* Ref.set(
+                      activePolicyMode,
+                      flavor.sessionModeForPolicy?.(nextRuntimePolicy) ?? null,
+                    );
                   }
                   const now = yield* DateTime.now;
                   return {
@@ -7677,6 +7724,7 @@ export function makeAcpAdapterV2(
                     yield* Ref.set(activeSessionSetup, activated);
                     yield* Ref.set(activeSelection, null);
                     yield* Ref.set(activeInteractionMode, null);
+                    yield* Ref.set(activePolicyMode, null);
                   }
                   const state = yield* Ref.get(snapshot);
                   const now = yield* DateTime.now;
@@ -7741,6 +7789,7 @@ export function makeAcpAdapterV2(
                         yield* Ref.set(activeSessionSetup, candidate);
                         yield* Ref.set(activeSelection, null);
                         yield* Ref.set(activeInteractionMode, null);
+                        yield* Ref.set(activePolicyMode, null);
                         yield* Ref.set(promptInstructionStates, new Map());
                         yield* Ref.set(providerTurns, new Map());
                         yield* Ref.set(snapshot, {
@@ -7837,6 +7886,7 @@ export function makeAcpAdapterV2(
                   yield* Ref.set(activeSessionSetup, forked);
                   yield* Ref.set(activeSelection, null);
                   yield* Ref.set(activeInteractionMode, null);
+                  yield* Ref.set(activePolicyMode, null);
                   itemIdentityVersion = 2;
                   const now = yield* DateTime.now;
                   const providerThread = makeProviderThread({

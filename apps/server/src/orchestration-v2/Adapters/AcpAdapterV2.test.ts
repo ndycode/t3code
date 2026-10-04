@@ -907,6 +907,194 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
+  it.live("re-applies the mapped session mode when only the runtime mode changes", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+      const instanceId = ProviderInstanceId.make("acp-test-policy-mode-switch");
+      const threadId = ThreadId.make("thread-acp-policy-mode-switch");
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          // Devin-style mapping: the agent's session mode is its permission
+          // surface, so the runtime mode drives it.
+          sessionModeForPolicy: (policy) => (policy.runtimeMode === "full-access" ? "code" : "ask"),
+          makeRuntime: makeMockRuntime({ childProcessSpawner, mockAgentPath, protocolEvents }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+        selfInvocation,
+      });
+      const policy = (runtimeMode: "approval-required" | "full-access") =>
+        ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode,
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+      const approvalPolicy = policy("approval-required");
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-policy-mode-switch"),
+        modelSelection,
+        runtimePolicy: approvalPolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy: approvalPolicy,
+      });
+      const now = yield* DateTime.now;
+      // Drop initialize/session-open traffic so each turn only sees its own.
+      yield* pollProtocolMethods(protocolEvents);
+      const runTurn = Effect.fnUntraced(function* (
+        ordinal: number,
+        runtimePolicy: ProviderAdapterV2RuntimePolicy,
+      ) {
+        yield* runtime.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId,
+            runtimePolicy,
+            now,
+            ordinal,
+          }),
+        );
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runDrain,
+        );
+        const requests: Array<{ readonly method: string; readonly params?: unknown }> = [];
+        while (true) {
+          const event = yield* Queue.take(protocolEvents);
+          if (event.direction !== "outgoing") continue;
+          const request = rawProtocolRequest(event);
+          if (request === undefined || typeof request.method !== "string") continue;
+          requests.push({ method: request.method, params: request.params });
+          if (request.method === "session/prompt") return requests;
+        }
+      });
+      const modeOptionValues = (
+        requests: ReadonlyArray<{ readonly method: string; readonly params?: unknown }>,
+      ) =>
+        requests.flatMap((request) => {
+          if (request.method !== "session/set_config_option") return [];
+          const params = request.params;
+          return typeof params === "object" &&
+            params !== null &&
+            Reflect.get(params, "configId") === "mode" &&
+            typeof Reflect.get(params, "value") === "string"
+            ? [Reflect.get(params, "value") as string]
+            : [];
+        });
+
+      // The session opens in "ask" (the mock's default), so the first turn
+      // has nothing to re-apply and an unchanged policy sends no mode set.
+      assert.deepEqual(modeOptionValues(yield* runTurn(1, approvalPolicy)), []);
+      assert.deepEqual(modeOptionValues(yield* runTurn(2, approvalPolicy)), []);
+
+      // A runtime-mode-only change must still reach the agent.
+      assert.deepEqual(modeOptionValues(yield* runTurn(3, policy("full-access"))), ["code"]);
+
+      // ...and switching back restores it.
+      assert.deepEqual(modeOptionValues(yield* runTurn(4, approvalPolicy)), ["ask"]);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.live("opens a session when the agent exposes no mode surface at all", () =>
+    Effect.gen(function* () {
+      // Devin Cloud (`devin acp --cloud`) advertises neither `modes` nor a
+      // category:"mode" config option, and rejects `session/set_config_option`
+      // for unknown ids — a blind policy-mode write failed session open.
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+      const instanceId = ProviderInstanceId.make("acp-test-no-mode-surface");
+      const threadId = ThreadId.make("thread-acp-no-mode-surface");
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          sessionModeForPolicy: (policy) => (policy.runtimeMode === "full-access" ? "code" : "ask"),
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            protocolEvents,
+            environment: {
+              T3_ACP_OMIT_MODEL_CONFIG_OPTION: "1",
+              T3_ACP_FAIL_SET_CONFIG_OPTION: "1",
+            },
+          }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+        selfInvocation,
+      });
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-no-mode-surface"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const now = yield* DateTime.now;
+      yield* pollProtocolMethods(protocolEvents);
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now,
+          ordinal: 1,
+        }),
+      );
+      const terminal = yield* runtime.events.pipe(
+        Stream.filter((event) => event.type === "turn.terminal"),
+        Stream.runHead,
+      );
+      assert.isTrue(terminal._tag === "Some" && terminal.value.type === "turn.terminal");
+      const methods = yield* pollProtocolMethods(protocolEvents);
+      assert.isFalse(
+        methods.includes("session/set_config_option"),
+        `unexpected config write against a mode-less agent: ${methods.join(",")}`,
+      );
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.effect("starts a new replay message after ACP v2 plan boundaries", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;

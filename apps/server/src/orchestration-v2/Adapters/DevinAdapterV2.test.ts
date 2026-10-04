@@ -130,6 +130,12 @@ describe("DevinAdapterV2 flavor", () => {
     assert.isUndefined(next.onSessionConfigurationUpdate);
     assert.isUndefined(next.onUrlElicitation);
   });
+
+  it("lets Devin's session mode gate its own terminal ops", () => {
+    // Devin never emits session/request_permission in any mode, so T3's
+    // ask-gated terminal/create could never be satisfied.
+    assert.isTrue(flavor().unguardedClientTerminals);
+  });
 });
 
 describe("Devin launch argv", () => {

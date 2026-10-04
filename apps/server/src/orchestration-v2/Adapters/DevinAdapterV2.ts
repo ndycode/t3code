@@ -108,11 +108,11 @@ export interface DevinAdapterV2Options {
 
 /**
  * Maps T3 runtime modes to Devin's native session modes
- * (`accept-edits`/`smart`/`ask`/`plan`/`bypass`). An explicit approval or
- * sandbox policy governs the thread on T3's side, so the agent must route
- * actions through `session/request_permission` for T3's disposition —
- * auto-approving session modes are off the table regardless of the stored
- * runtime mode. Plan mode is selected by the shared interaction-mode
+ * (`accept-edits`/`smart`/`ask`/`plan`/`bypass`). Devin emits
+ * `session/request_permission` only per its own judgment, so T3 cannot make
+ * its approval policy authoritative in agentic modes — an explicit approval
+ * or sandbox policy forces `ask`, the chat-only mode that issues no tool
+ * calls at all. Plan mode is selected by the shared interaction-mode
  * machinery after this mapping.
  */
 export function devinSessionModeForPolicy(
@@ -149,6 +149,13 @@ export function makeDevinAcpAdapterFlavor(options: DevinAdapterV2Options): AcpAd
     normalizeToolCall: normalizeDevinToolCall,
     extractSubagentUpdate: extractDevinSubagentUpdate,
     sessionModeForPolicy: devinSessionModeForPolicy,
+    // Devin's session mode is the permission authority for terminal ops: it
+    // sends routine terminal/creates directly and emits
+    // session/request_permission only for operations it judges risky
+    // (verified against devin acp). Requiring a permission request first
+    // would dead-loop every routine command; requests Devin does emit still
+    // surface as T3 approvals.
+    unguardedClientTerminals: true,
     makeRuntime:
       options.makeRuntime ??
       ((input) =>
@@ -200,8 +207,8 @@ export function makeDevinAdapterV2(options: DevinAdapterV2Options) {
     idAllocator: options.idAllocator,
     serverConfig: options.serverConfig,
     selfInvocation: options.selfInvocation,
-    // Devin runs commands through client terminals and has no ask flow of its
-    // own to fall back on for them.
+    // Devin runs commands through client terminals. Its session mode is the
+    // permission authority for them (see unguardedClientTerminals).
     clientTerminals: {
       childProcessSpawner: options.childProcessSpawner,
       environment: options.environment,
