@@ -48,6 +48,8 @@ import {
   connectionRoutes,
   entryWithRoutes,
   findBearerRouteByUrl,
+  mergeLearnedRoutes,
+  routesAfterRemoving,
   upsertRoute,
 } from "./routes.ts";
 
@@ -350,6 +352,7 @@ export const make = Effect.gen(function* () {
           const scope = yield* Scope.fork(registryScope);
           const supervisor = yield* EnvironmentSupervisor.make(entry, {
             initiallyDesired: false,
+            learnRoutes: (input) => learnRoutes({ environmentId, ...input }),
           }).pipe(
             Effect.provideService(Connectivity.Connectivity, connectivity),
             Effect.provideService(ConnectionDriver.ConnectionDriver, driver),
@@ -830,6 +833,61 @@ export const make = Effect.gen(function* () {
       Effect.ignore,
     );
 
+  // Plain HTTP routes are unusable from an HTTPS page, which blocks mixed content.
+  const allowInsecureRoutes =
+    typeof globalThis.location === "undefined" || globalThis.location.protocol !== "https:";
+
+  /**
+   * Saves the direct addresses a connected server reports as learned routes,
+   * replacing learned routes it no longer reports. Routes the user saved are
+   * never changed. Learned routes reuse the active route's credential, so they
+   * do not revoke GitHub routing trust the way a newly paired address does.
+   */
+  const learnRoutes = Effect.fn("EnvironmentRegistry.learnRoutes")(function* (input: {
+    readonly environmentId: EnvironmentId;
+    readonly activeRoute: ConnectionRoute;
+    readonly reported: ReadonlyArray<{ readonly httpBaseUrl: string }>;
+  }) {
+    return yield* withLeaseLock(
+      input.environmentId,
+      Effect.gen(function* () {
+        if ((yield* Ref.get(platformEnvironmentIds)).has(input.environmentId)) {
+          return Option.none<ConnectionCatalogEntry>();
+        }
+        const entry = (yield* SubscriptionRef.get(entries)).get(input.environmentId);
+        if (entry === undefined) return Option.none<ConnectionCatalogEntry>();
+        const routes = mergeLearnedRoutes({
+          entry,
+          activeRoute: input.activeRoute,
+          reported: input.reported,
+          allowInsecure: allowInsecureRoutes,
+        });
+        if (routes === null) return Option.none<ConnectionCatalogEntry>();
+        const next = entryWithRoutes(entry, routes);
+        yield* registrations.setRoutes(input.environmentId, persistedRoutes(next));
+        // Update the lease in place: the live session already works, and
+        // `installEntryLocked` would replace it for a route list change.
+        const lease = (yield* SubscriptionRef.get(serviceScopes)).get(input.environmentId);
+        if (lease !== undefined) {
+          yield* SubscriptionRef.update(serviceScopes, (current) =>
+            new Map(current).set(input.environmentId, { ...lease, entry: next }),
+          );
+        }
+        yield* SubscriptionRef.update(entries, (current) =>
+          new Map(current).set(input.environmentId, next),
+        );
+        return Option.some(next);
+      }),
+    ).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("Could not save routes learned from the environment.", {
+          environmentId: input.environmentId,
+          error,
+        }).pipe(Effect.as(Option.none<ConnectionCatalogEntry>())),
+      ),
+    );
+  });
+
   const removeRoute = Effect.fn("EnvironmentRegistry.removeRoute")(function* (
     environmentId: EnvironmentId,
     routeId: string,
@@ -843,7 +901,7 @@ export const make = Effect.gen(function* () {
         const routes = connectionRoutes(entry);
         const route = routes.find((candidate) => connectionRouteId(candidate.target) === routeId);
         if (route === undefined) return;
-        const remaining = routes.filter((candidate) => candidate !== route);
+        const remaining = routesAfterRemoving(routes, routeId);
         if (remaining.length === 0) return yield* removeLocked(environmentId);
         yield* replaceRoutesLocked(entry, remaining);
         const profile = Option.getOrNull(route.profile);

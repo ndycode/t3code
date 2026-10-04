@@ -340,6 +340,42 @@ describe("RemoteEnvironmentAuthorization", () => {
     }),
   );
 
+  it.effect("uses the T3 Connect token on a learned direct address without the relay", () =>
+    Effect.gen(function* () {
+      const cached = new TokenStore.RemoteDpopAccessToken({
+        environmentId: ENVIRONMENT_ID,
+        accountId: "account-1",
+        label: DESCRIPTOR.label,
+        endpoint: ENDPOINT,
+        accessToken: "cached-access-token",
+        expiresAtEpochMs: Number.MAX_SAFE_INTEGER,
+        dpopThumbprint: "thumbprint-1",
+      });
+      const harness = yield* makeHarness({
+        initialToken: cached,
+        responses: [websocketTicket("lan-ticket")],
+      });
+
+      const authorized = yield* Effect.gen(function* () {
+        const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
+        return yield* remote.authorizeDpop({
+          expectedEnvironmentId: ENVIRONMENT_ID,
+          directEndpoint: {
+            httpBaseUrl: "http://192.168.1.10:3773/",
+            wsBaseUrl: "ws://192.168.1.10:3773/",
+          },
+        });
+      }).pipe(Effect.provide(harness.layer));
+
+      expect(authorized.httpBaseUrl).toBe("http://192.168.1.10:3773/");
+      expect(authorized.socketUrl).toMatch(/^ws:\/\/192\.168\.1\.10:3773\/ws\?/);
+      expect(yield* Ref.get(harness.bootstrapCalls)).toBe(0);
+      expect(String(harness.fetch.calls[0]?.[0])).toBe(
+        "http://192.168.1.10:3773/api/auth/websocket-ticket",
+      );
+    }),
+  );
+
   it.effect("refreshes and persists an expired environment token", () =>
     Effect.gen(function* () {
       const expired = new TokenStore.RemoteDpopAccessToken({

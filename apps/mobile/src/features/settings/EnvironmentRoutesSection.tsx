@@ -5,6 +5,7 @@ import {
   connectionRouteId,
   connectionRouteLabel,
   connectionRoutes,
+  isLearned,
 } from "@t3tools/client-runtime/connection";
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -226,7 +227,7 @@ function RouteRow(props: {
         </View>
         {address !== null ? (
           <Text numberOfLines={1} className="text-sm text-foreground-muted">
-            {address}
+            {isLearned(route) ? `${address} · found automatically` : address}
           </Text>
         ) : null}
       </View>

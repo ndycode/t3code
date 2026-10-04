@@ -5,8 +5,12 @@ import {
 } from "@t3tools/shared/hostClassification";
 import * as Option from "effect/Option";
 
-import type { ConnectionCatalogEntry, ConnectionRoute } from "./catalog.ts";
-import type { ConnectionTarget } from "./model.ts";
+import {
+  BearerConnectionProfile,
+  type ConnectionCatalogEntry,
+  type ConnectionRoute,
+} from "./catalog.ts";
+import { BearerConnectionTarget, type ConnectionTarget } from "./model.ts";
 
 /**
  * A saved environment can hold several routes: T3 Connect, direct URLs (LAN,
@@ -186,4 +190,134 @@ export function hasRelayRoute(
   return [entry.target, ...(entry.alternateRoutes ?? []).map((route) => route.target)].some(
     (target) => target._tag === "RelayConnectionTarget",
   );
+}
+
+/**
+ * The routes after the server reports where it listens. Each reported address
+ * becomes a learned route that authenticates the same way as the route in use:
+ * the paired token for a bearer route, the T3 Connect credential for relay.
+ * Learned routes the server no longer reports are dropped, so a changed LAN
+ * address replaces the old one. Routes the user saved are never touched, and
+ * an address already saved is not learned twice.
+ */
+export function mergeLearnedRoutes(input: {
+  readonly entry: ConnectionCatalogEntry;
+  readonly activeRoute: ConnectionRoute;
+  readonly reported: ReadonlyArray<{ readonly httpBaseUrl: string }>;
+  /** Plain HTTP routes are unusable from an HTTPS page (mixed content). */
+  readonly allowInsecure: boolean;
+}): ReadonlyArray<ConnectionRoute> | null {
+  const { entry } = input;
+  const active = input.activeRoute.target;
+  const saved = connectionRoutes(entry);
+  // The primary and SSH routes have no credential a learned route could reuse.
+  if (active._tag !== "RelayConnectionTarget" && active._tag !== "BearerConnectionTarget") {
+    return null;
+  }
+  const authorization = active._tag === "RelayConnectionTarget" ? "t3-connect" : undefined;
+  const sharedCredential =
+    active._tag === "BearerConnectionTarget"
+      ? credentialConnectionId(active.connectionId)
+      : undefined;
+
+  const kept = saved.filter((route) => !isLearned(route));
+  const normalized = (url: string) => url.replace(/\/+$/, "");
+  const known = new Set(
+    kept.flatMap((route) => {
+      const url = routeHttpBaseUrl(route);
+      return url === null ? [] : [normalized(url)];
+    }),
+  );
+  let next: ReadonlyArray<ConnectionRoute> = kept;
+  for (const endpoint of input.reported) {
+    let url: URL;
+    try {
+      url = new URL(endpoint.httpBaseUrl);
+    } catch {
+      continue;
+    }
+    if (url.protocol !== "http:" && url.protocol !== "https:") continue;
+    if (url.protocol === "http:" && !input.allowInsecure) continue;
+    // A loopback address names whichever device opens it, never the server.
+    if (isLocalLoopbackHost(url.hostname)) continue;
+    const httpBaseUrl = `${url.origin}/`;
+    if (known.has(normalized(httpBaseUrl))) continue;
+    known.add(normalized(httpBaseUrl));
+    const connectionId = learnedConnectionId(
+      entry.target.environmentId,
+      url.host,
+      sharedCredential,
+    );
+    next = insertRoute(next, {
+      target: new BearerConnectionTarget({
+        environmentId: entry.target.environmentId,
+        label: entry.target.label,
+        connectionId,
+      }),
+      profile: Option.some(
+        new BearerConnectionProfile({
+          connectionId,
+          environmentId: entry.target.environmentId,
+          label: entry.target.label,
+          httpBaseUrl,
+          wsBaseUrl: `${url.protocol === "https:" ? "wss:" : "ws:"}//${url.host}/`,
+          learned: true,
+          ...(authorization === undefined ? {} : { authorization }),
+        }),
+      ),
+    });
+  }
+  const before = saved.map((route) => connectionRouteId(route.target)).join("\n");
+  const after = next.map((route) => connectionRouteId(route.target)).join("\n");
+  return before === after ? null : next;
+}
+
+/**
+ * A learned bearer route borrows the credential of the route it was learned
+ * from, so its id points back at that credential's owner.
+ */
+function learnedConnectionId(
+  environmentId: string,
+  host: string,
+  sharedCredential: string | undefined,
+): string {
+  return sharedCredential === undefined
+    ? `learned:${environmentId}:${host}`
+    : `learned:${environmentId}:${host}@${sharedCredential}`;
+}
+
+/** The connection id whose stored credential a bearer route uses. */
+export function credentialConnectionId(connectionId: string): string {
+  const at = connectionId.lastIndexOf("@");
+  return connectionId.startsWith("learned:") && at !== -1
+    ? connectionId.slice(at + 1)
+    : connectionId;
+}
+
+export function isLearned(route: ConnectionRoute): boolean {
+  const profile = Option.getOrNull(route.profile);
+  return profile?._tag === "BearerConnectionProfile" && profile.learned === true;
+}
+
+/**
+ * Routes left after the user removes one. A learned route borrows the
+ * credential of the route it was learned over, so it cannot outlive that
+ * route: removing T3 Connect also removes routes learned through it, and
+ * removing a paired address removes routes that borrow its token.
+ */
+export function routesAfterRemoving(
+  routes: ReadonlyArray<ConnectionRoute>,
+  removedId: string,
+): ReadonlyArray<ConnectionRoute> {
+  const removed = routes.find((route) => connectionRouteId(route.target) === removedId);
+  if (removed === undefined) return routes;
+  return routes.filter((route) => {
+    if (route === removed) return false;
+    if (!isLearned(route)) return true;
+    const profile = Option.getOrNull(route.profile);
+    if (profile?._tag === "BearerConnectionProfile" && profile.authorization === "t3-connect") {
+      return removed.target._tag !== "RelayConnectionTarget";
+    }
+    return credentialConnectionId(connectionRouteId(route.target)) !== removedId;
+  });
 }

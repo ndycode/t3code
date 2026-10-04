@@ -22,6 +22,7 @@ import {
   connectionRouteId,
   connectionRouteLabel,
   connectionRoutes,
+  isLearned,
 } from "@t3tools/client-runtime/connection";
 import { GripVerticalIcon, PlusIcon, XIcon } from "lucide-react";
 import { useState } from "react";
@@ -182,7 +183,7 @@ function SortableRouteRow({
         {address !== null ? (
           <p className="truncate text-2xs text-muted-foreground">
             {address}
-            {isLearnedRoute(route) ? " · found automatically" : ""}
+            {isLearned(route) ? " · found automatically" : ""}
           </p>
         ) : null}
       </div>
@@ -205,14 +206,5 @@ function SortableRouteRow({
         </Tooltip>
       ) : null}
     </li>
-  );
-}
-
-function isLearnedRoute(route: ConnectionRoute): boolean {
-  return (
-    route.profile._tag === "Some" &&
-    route.profile.value._tag === "BearerConnectionProfile" &&
-    "learned" in route.profile.value &&
-    route.profile.value.learned === true
   );
 }
