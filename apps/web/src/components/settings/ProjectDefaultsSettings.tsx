@@ -80,6 +80,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
   const mixedBrowser = useScopedSettingsMixed(["enableAgentBrowserAccess"]);
   const mixedAutoPull = useScopedSettingsMixed(["defaultAutoPull"]);
   const mixedMergeMethod = useScopedSettingsMixed(["pullRequestMergeMethod"]);
+  const mixedDrafts = useScopedSettingsMixed(["openPullRequestsAsDrafts"]);
   const modelSource = useScopedSettingSource(["defaultModelSelection"]);
   const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
   const unavailable = connectedEnvironments.length === 0;
@@ -458,6 +459,34 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
                   <SelectItem value="rebase">{PULL_REQUEST_MERGE_METHOD_LABELS.rebase}</SelectItem>
                 </SelectPopup>
               </Select>
+            }
+          />
+          <SettingsRow
+            serverScoped
+            settingKeys={["openPullRequestsAsDrafts"]}
+            mixed={mixedDrafts}
+            {...searchableSetting("open-pull-requests-as-drafts")}
+            description={
+              isProjectScope
+                ? "New pull requests and merge requests in this project open as drafts."
+                : "New pull requests and merge requests open as drafts. Projects can override it."
+            }
+            resetAction={
+              settings.openPullRequestsAsDrafts ? (
+                <SettingResetButton
+                  label="open pull requests as drafts"
+                  tooltip="Reset open as drafts to off"
+                  onClick={() => updateSettings({ openPullRequestsAsDrafts: false })}
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                aria-label="Open pull requests as drafts"
+                mixed={mixedDrafts}
+                checked={mixedDrafts ? false : settings.openPullRequestsAsDrafts}
+                onCheckedChange={(enabled) => updateSettings({ openPullRequestsAsDrafts: enabled })}
+              />
             }
           />
         </>

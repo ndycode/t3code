@@ -98,6 +98,7 @@ export type GitBranchPullRequest = NonNullable<VcsStatusResult["pr"]> & {
 interface SourceControlTextGenerationSettings {
   readonly modelSelection: ModelSelection;
   readonly style: SourceControlWritingStyleSettings;
+  readonly openPullRequestsAsDrafts: boolean;
 }
 
 export class GitManager extends Context.Service<
@@ -2098,6 +2099,7 @@ export const make = Effect.gen(function* () {
         headSelector: headContext.preferredHeadSelector,
         title: generated.title,
         bodyFile,
+        draft: settings.openPullRequestsAsDrafts,
       })
       .pipe(Effect.ensuring(fileSystem.remove(bodyFile).pipe(Effect.ignore)));
 
@@ -2711,6 +2713,7 @@ export const make = Effect.gen(function* () {
               ? Effect.succeed({
                   modelSelection: settings.textGenerationModelSelection,
                   style: settings.sourceControlWritingStyle,
+                  openPullRequestsAsDrafts: settings.openPullRequestsAsDrafts,
                 })
               : providerRegistry.getProviders.pipe(
                   Effect.map((providers) => ({
@@ -2719,6 +2722,7 @@ export const make = Effect.gen(function* () {
                       providers,
                     ),
                     style: settings.sourceControlWritingStyle,
+                    openPullRequestsAsDrafts: settings.openPullRequestsAsDrafts,
                   })),
                 ),
           ),

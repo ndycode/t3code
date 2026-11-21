@@ -303,6 +303,33 @@ describe("AzureDevOpsCli.layer", () => {
     }).pipe(Effect.provide(layer)),
   );
 
+  it.effect("creates pull requests with --draft when asked", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const bodyFile = `/tmp/t3code-azure-devops-cli-draft-.md`;
+      yield* fileSystem.writeFileString(bodyFile, "Generated body");
+      mockRun.mockReturnValueOnce(Effect.succeed(processOutput("{}")));
+
+      const az = yield* AzureDevOpsCli.AzureDevOpsCli;
+      yield* az.createPullRequest({
+        cwd: "/repo",
+        baseBranch: "main",
+        headSelector: "feature/provider",
+        title: "Provider PR",
+        bodyFile,
+        draft: true,
+      });
+
+      expect(mockRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: "az",
+          cwd: "/repo",
+          args: expect.arrayContaining(["--draft", "true"]),
+        }),
+      );
+    }).pipe(Effect.provide(layer)),
+  );
+
   it.effect("does not force JSON output on checkout side-effect commands", () =>
     Effect.gen(function* () {
       mockRun.mockReturnValueOnce(Effect.succeed(processOutput("")));

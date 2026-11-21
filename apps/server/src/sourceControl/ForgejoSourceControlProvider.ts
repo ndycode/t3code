@@ -277,6 +277,9 @@ export const make = Effect.gen(function* () {
             head: owner ? `${owner}:${head}` : head,
             title: input.title,
             body: yield* fs.readFileString(input.bodyFile),
+            // Forgejo (and recent Gitea) accept a `draft` field; older servers
+            // ignore unknown fields, so it degrades to a normal PR there.
+            ...(input.draft === true ? { draft: true } : {}),
           },
         });
       }).pipe(mapError("createChangeRequest", input.cwd)),

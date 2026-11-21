@@ -51,6 +51,7 @@ const PAGE_PROJECT_KEYS: Record<SettingsPage, readonly ProjectScopedServerSettin
   "source-control": [
     "defaultAutoPull",
     "newWorktreesStartFromOrigin",
+    "openPullRequestsAsDrafts",
     "branchNamingMode",
     "branchNamePrefix",
     "branchNameInstructions",
@@ -342,6 +343,16 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                       value={uniform("defaultAutoPull")}
                       disabled={disabledFor("defaultAutoPull")}
                       onValueChange={(value) => write({ defaultAutoPull: value })}
+                    />
+                  </SettingsSection>
+                  <SettingsSection title="Pull requests">
+                    <SettingsSwitchRow
+                      icon="doc.text"
+                      label="Open pull requests as drafts"
+                      subtitle="New pull requests and merge requests open as drafts."
+                      value={uniform("openPullRequestsAsDrafts")}
+                      disabled={disabledFor("openPullRequestsAsDrafts")}
+                      onValueChange={(value) => write({ openPullRequestsAsDrafts: value })}
                     />
                   </SettingsSection>
                   <SettingsSection title="Worktrees">

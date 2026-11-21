@@ -226,6 +226,43 @@ layer("GitLabCli.layer", (it) => {
     }),
   );
 
+  it.effect("prefixes the merge request title with Draft: when asked", () =>
+    Effect.gen(function* () {
+      mockedRun.mockReturnValueOnce(Effect.succeed(processOutput("{}")));
+
+      const glab = yield* GitLabCli.GitLabCli;
+      yield* glab.createMergeRequest({
+        cwd: "/repo",
+        baseBranch: "main",
+        headSelector: "owner:feature/provider",
+        title: "Provider MR",
+        bodyFile: "/tmp/t3-mr-body.md",
+        draft: true,
+      });
+
+      expect(mockedRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: "glab",
+          cwd: "/repo",
+          args: [
+            "api",
+            "--method",
+            "POST",
+            "projects/:fullpath/merge_requests",
+            "--raw-field",
+            "source_branch=feature/provider",
+            "--raw-field",
+            "target_branch=main",
+            "--raw-field",
+            "title=Draft: Provider MR",
+            "--field",
+            "description=@/tmp/t3-mr-body.md",
+          ],
+        }),
+      );
+    }),
+  );
+
   it.effect("creates repositories under an explicit namespace", () =>
     Effect.gen(function* () {
       mockedRun

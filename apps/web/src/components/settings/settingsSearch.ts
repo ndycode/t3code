@@ -708,6 +708,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["pull request merge squash rebase last selected"],
   },
   {
+    id: "open-pull-requests-as-drafts",
+    title: "Open pull requests as drafts",
+    to: "/settings/source-control",
+    scope: "project-defaults",
+    searchTerms: ["pull request draft wip work in progress merge request ready for review"],
+  },
+  {
     id: "source-control",
     title: "Source control",
     to: "/settings/source-control",
