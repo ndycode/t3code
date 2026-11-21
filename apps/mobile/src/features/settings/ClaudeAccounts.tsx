@@ -7,6 +7,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import {
   isManagedSettingPath,
+  type ProviderInstanceConfig,
   type ProviderInstanceId,
   type ProviderInstanceMutation,
   type ServerProvider,
@@ -20,6 +21,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { ControlPill } from "../../components/ui/ControlPill";
 import { ListActionRow } from "../../components/ui/ListActionRow";
 import { Menu } from "../../components/ui/Menu";
+import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
@@ -67,9 +69,11 @@ function useProviderInstanceMutation(environment: SettingsTarget) {
 export function ClaudeAccount({
   environment,
   provider,
+  divider = true,
 }: {
   readonly environment: SettingsTarget;
   readonly provider: ServerProvider;
+  readonly divider?: boolean;
 }) {
   const gt = useGT();
   const [editing, setEditing] = useState(false);
@@ -92,6 +96,25 @@ export function ClaudeAccount({
       environment.serverConfig.managedPolicy,
       `providerInstances.${provider.instanceId}`,
     );
+  const enabledLocked = isManagedSettingPath(
+    environment.serverConfig.managedPolicy,
+    `providerInstances.${provider.instanceId}.enabled`,
+  );
+  function toggleEnabled(enabled: boolean) {
+    if (enabledLocked || pending) return;
+    const nextInstance: ProviderInstanceConfig = instance
+      ? { ...instance, enabled }
+      : {
+          driver: provider.driver,
+          ...(provider.displayName ? { displayName: provider.displayName } : {}),
+          enabled,
+        };
+    void run({
+      operation: "upsert",
+      instanceId: provider.instanceId,
+      instance: nextInstance,
+    });
+  }
   const actions: MenuAction[] = [
     { id: "edit", title: gt("Edit"), image: "pencil" },
     ...(removable
@@ -125,7 +148,7 @@ export function ClaudeAccount({
     );
   }
   return (
-    <View className="border-t border-border-subtle">
+    <View className={divider ? "border-t border-border-subtle" : undefined}>
       <View className="min-h-16 flex-row items-center gap-3 px-4 py-3">
         <View className="min-w-0 shrink grow gap-0.5">
           <Text textRole="body" className="text-foreground" numberOfLines={1}>
@@ -136,24 +159,32 @@ export function ClaudeAccount({
           </Text>
         </View>
         {editing ? null : (
-          <Menu
-            accessible
-            accessibilityRole="button"
-            accessibilityLabel={gt("{account} options", { account: name })}
-            title={name}
-            actions={actions}
-            onPressAction={({ nativeEvent }) => {
-              if (pending) return;
-              if (nativeEvent.event === "edit") setEditing(true);
-              else if (nativeEvent.event === "remove") remove();
-            }}
-          >
-            <ControlPill
-              icon="ellipsis"
+          <View className="flex-row items-center gap-2">
+            <Menu
+              accessible
+              accessibilityRole="button"
               accessibilityLabel={gt("{account} options", { account: name })}
-              disabled={pending}
+              title={name}
+              actions={actions}
+              onPressAction={({ nativeEvent }) => {
+                if (pending) return;
+                if (nativeEvent.event === "edit") setEditing(true);
+                else if (nativeEvent.event === "remove") remove();
+              }}
+            >
+              <ControlPill
+                icon="ellipsis"
+                accessibilityLabel={gt("{account} options", { account: name })}
+                disabled={pending}
+              />
+            </Menu>
+            <ThemedSwitch
+              accessibilityLabel={gt("Enable {provider}", { provider: name })}
+              disabled={enabledLocked || pending}
+              value={provider.enabled}
+              onValueChange={toggleEnabled}
             />
-          </Menu>
+          </View>
         )}
       </View>
       {editing ? (
