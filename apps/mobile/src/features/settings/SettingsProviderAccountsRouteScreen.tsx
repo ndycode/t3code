@@ -9,7 +9,9 @@ import {
 import {
   AuthProvidersManageScope,
   isManagedDriverAllowed,
+  isManagedSettingPath,
   type ProviderAuthResponse,
+  type ProviderInstanceConfig,
   type ServerProvider,
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
@@ -26,6 +28,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { ControlPill } from "../../components/ui/ControlPill";
 import { Menu } from "../../components/ui/Menu";
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
+import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { environmentPresentations } from "../../state/presentation";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -94,32 +97,81 @@ function EnvironmentProviders({
   readonly environment: SettingsTarget;
   readonly providers: ReadonlyArray<ServerProvider>;
 }) {
-  const accounts = providers.filter(canManageProvider);
+  const gt = useGT();
+  const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+  const refreshPendingRef = useRef(false);
+  const [refreshPending, setRefreshPending] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   // Claude has no in-app sign-in; each account is its own instance on a signed-in config folder.
   const claudeAccounts = providers.filter(
     (provider) => provider.driver === CLAUDE_DRIVER && !canManageProvider(provider),
+  );
+  const accounts = providers.filter(
+    (provider) => !(provider.driver === CLAUDE_DRIVER && !canManageProvider(provider)),
   );
   const canAddClaude = isManagedDriverAllowed(
     environment.serverConfig.managedPolicy,
     CLAUDE_DRIVER,
   );
+  async function handleRefresh() {
+    if (refreshPendingRef.current) return;
+    refreshPendingRef.current = true;
+    setRefreshPending(true);
+    setRefreshError(null);
+    const result = await refreshProviders({
+      environmentId: environment.environmentId,
+      input: { reloadSecrets: true },
+    });
+    refreshPendingRef.current = false;
+    setRefreshPending(false);
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const failure = squashAtomCommandFailure(result);
+      setRefreshError(
+        failure instanceof Error
+          ? (errorDisplayMessage(failure, m) ?? failure.message)
+          : gt("Could not refresh providers."),
+      );
+    }
+  }
   return (
     <>
-      {accounts.map((provider, index) => (
+      <SettingsActionRow
+        icon="arrow.clockwise"
+        label={gt("Refresh providers")}
+        disabled={refreshPending}
+        loading={refreshPending}
+        onPress={() => {
+          void handleRefresh();
+        }}
+      />
+      {refreshError ? (
+        <Text accessibilityRole="alert" className="px-4 pb-3 text-danger-foreground">
+          {refreshError}
+        </Text>
+      ) : null}
+      {accounts.map((provider) => (
         <ProviderAccount
           key={provider.instanceId}
           environment={environment}
           provider={provider}
-          divider={index > 0}
+          divider
         />
       ))}
-      {accounts.length === 0 ? (
-        <Text className="p-4 text-foreground-muted">
-          <T>Configure a provider with in-app sign-in in web or desktop Settings.</T>
+      {accounts.length === 0 && claudeAccounts.length === 0 ? (
+        <Text className="border-t border-border-subtle p-4 text-foreground-muted">
+          <T>No providers configured.</T>
         </Text>
       ) : null}
       {claudeAccounts.map((provider) => (
-        <ClaudeAccount key={provider.instanceId} environment={environment} provider={provider} />
+        <ClaudeAccount
+          key={provider.instanceId}
+          environment={environment}
+          provider={provider}
+          divider
+        />
       ))}
       {canAddClaude ? <AddClaudeAccount environment={environment} /> : null}
     </>
@@ -154,8 +206,11 @@ function ProviderAccount({
   const gt = useGT();
   const environmentId = environment.environmentId;
   const instanceId = provider.instanceId;
+  const supportsAuth = canManageProvider(provider);
   const target = { environmentId, input: { instanceId } };
-  const auth = useEnvironmentQuery(serverEnvironment.providerAuthState(target));
+  const auth = useEnvironmentQuery(
+    supportsAuth ? serverEnvironment.providerAuthState(target) : null,
+  );
   const options = { reportFailure: false, reportDefect: false };
   const start = useAtomCommand(serverEnvironment.startProviderAuth, options);
   const respond = useAtomCommand(serverEnvironment.respondProviderAuth, options);
@@ -163,8 +218,13 @@ function ProviderAccount({
   const cancel = useAtomCommand(serverEnvironment.cancelProviderAuth, options);
   const logout = useAtomCommand(serverEnvironment.logoutProviderAuth, options);
   const removeMethod = useAtomCommand(serverEnvironment.removeProviderAuthMethod, options);
+  const mutateProviderInstance = useAtomCommand(serverEnvironment.mutateProviderInstance, options);
   const canRemoveMethod = useAtomValue(
     serverEnvironment.removeProviderAuthMethod.permissionAtom(environmentId),
+  );
+  const enabledLocked = isManagedSettingPath(
+    environment.serverConfig.managedPolicy,
+    `providerInstances.${instanceId}.enabled`,
   );
   // Matches ListRowLayout: large text stacks the action below instead of squeezing the status.
   const stacked = useWindowDimensions().fontScale >= 1.5;
@@ -182,12 +242,14 @@ function ProviderAccount({
     provider.auth.status === "authenticated" ||
     (provider.auth.status === "unknown" && state?.phase === "succeeded");
   const isDiscovering =
+    supportsAuth &&
     provider.driver === "acpRegistry" &&
     !active &&
     !signedIn &&
     !auth.error &&
     state?.methods === undefined;
   const needsExternalSetup =
+    supportsAuth &&
     !active &&
     !signedIn &&
     (provider.setup?.canAuthenticate === false ||
@@ -247,6 +309,7 @@ function ProviderAccount({
   const methods = state?.methods ?? [];
   // The status line says why a provider that is missing or turned off can't sign in.
   const canSignIn =
+    supportsAuth &&
     !active &&
     !needsExternalSetup &&
     provider.setup?.canAuthenticate !== false &&
@@ -254,7 +317,10 @@ function ProviderAccount({
     provider.installed;
   const signInDisabled = disabled || state === null;
   const canSignOut =
-    !active && signedIn && (provider.auth.canLogout ?? provider.setup?.canAuthenticate);
+    supportsAuth &&
+    !active &&
+    signedIn &&
+    (provider.auth.canLogout ?? provider.setup?.canAuthenticate);
   const showCallback =
     Boolean(url) && (interaction?.type === "browser" ? interaction.acceptsCallback : !interaction);
   const usesCredentials =
@@ -269,13 +335,42 @@ function ProviderAccount({
           ? gt("Signed in")
           : isDiscovering
             ? gt("Discovering sign-in methods…")
-            : needsExternalSetup
-              ? gt("No in-app sign-in advertised. Follow the provider's docs to finish setup.")
-              : !provider.installed
-                ? gt("Not installed")
-                : usesCredentials
-                  ? gt("Connect to load models")
-                  : gt("Not signed in");
+            : !provider.installed
+              ? gt("Not installed")
+              : needsExternalSetup
+                ? gt("No in-app sign-in advertised. Follow the provider's docs to finish setup.")
+                : provider.status === "ready"
+                  ? gt("Ready")
+                  : (provider.status === "warning" || provider.status === "error") &&
+                      provider.message
+                    ? provider.message
+                    : usesCredentials
+                      ? gt("Connect to load models")
+                      : gt("Not signed in");
+  function toggleEnabled(enabled: boolean) {
+    if (enabledLocked || pending || active) return;
+    const existing = environment.serverConfig.settings.providerInstances[instanceId];
+    const instance: ProviderInstanceConfig = existing
+      ? { ...existing, enabled }
+      : {
+          driver: provider.driver,
+          ...(provider.displayName ? { displayName: provider.displayName } : {}),
+          enabled,
+        };
+    void run(() =>
+      mutateProviderInstance({
+        environmentId,
+        input: {
+          patch: {},
+          providerInstanceMutation: {
+            operation: "upsert",
+            instanceId,
+            instance,
+          },
+        },
+      }),
+    );
+  }
   // A provider with several sign-in methods picks one from a menu on the same control.
   const methodActions: MenuAction[] = methods.map((method) => ({
     id: `method:${method.id}`,
@@ -437,7 +532,15 @@ function ProviderAccount({
         }
       >
         <ProviderAccountSummary key={email} name={name} status={status} email={email} />
-        {trailing}
+        <View className="flex-row items-center gap-2">
+          {trailing}
+          <ThemedSwitch
+            accessibilityLabel={gt("Enable {provider}", { provider: name })}
+            disabled={enabledLocked || pending || active}
+            value={provider.enabled}
+            onValueChange={toggleEnabled}
+          />
+        </View>
       </View>
       {interaction?.type === "deviceCode" ||
       interaction?.type === "terminal" ||
