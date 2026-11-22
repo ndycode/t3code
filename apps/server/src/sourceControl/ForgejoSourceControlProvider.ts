@@ -275,10 +275,13 @@ export const make = Effect.gen(function* () {
           body: {
             base: input.target?.refName ?? input.baseRefName,
             head: owner ? `${owner}:${head}` : head,
-            title: input.title,
+            // "WIP:" is the convention both hosts read as a draft and strip on
+            // "Mark as ready"; it covers servers old enough to ignore the
+            // `draft` body field below.
+            title: input.draft === true ? `WIP: ${input.title}` : input.title,
             body: yield* fs.readFileString(input.bodyFile),
             // Forgejo (and recent Gitea) accept a `draft` field; older servers
-            // ignore unknown fields, so it degrades to a normal PR there.
+            // ignore unknown fields and rely on the title prefix instead.
             ...(input.draft === true ? { draft: true } : {}),
           },
         });
