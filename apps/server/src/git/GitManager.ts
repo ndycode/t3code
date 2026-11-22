@@ -714,18 +714,23 @@ export const make = Effect.gen(function* () {
   const projectSettingsFor = Effect.fnUntraced(function* (input: {
     readonly cwd: string;
     readonly threadId?: ThreadId | undefined;
+    readonly projectId?: ProjectId | undefined;
   }) {
     const settings = yield* serverSettingsService.getSettings;
     if (!hasProjectSettingsOverrides(settings)) return settings;
-    const projectId: ProjectId | null = yield* input.threadId !== undefined
-      ? threads.getThreadShell(input.threadId).pipe(
-          Effect.map((thread) => thread?.projectId ?? null),
-          Effect.orElseSucceed(() => null),
-        )
-      : projects.findActiveByWorkspaceRoot(input.cwd).pipe(
-          Effect.map((project) => Option.getOrNull(project)?.projectId ?? null),
-          Effect.orElseSucceed(() => null),
-        );
+    // An explicit project (e.g. a reused worktree's) wins over inferring one
+    // from the thread or workspace root.
+    const projectId: ProjectId | null = yield* input.projectId !== undefined
+      ? Effect.succeed(input.projectId)
+      : input.threadId !== undefined
+        ? threads.getThreadShell(input.threadId).pipe(
+            Effect.map((thread) => thread?.projectId ?? null),
+            Effect.orElseSucceed(() => null),
+          )
+        : projects.findActiveByWorkspaceRoot(input.cwd).pipe(
+            Effect.map((project) => Option.getOrNull(project)?.projectId ?? null),
+            Effect.orElseSucceed(() => null),
+          );
     return resolveProjectSettings(settings, projectId).settings;
   });
   const readRepositoryInstructions = (cwd: string, fileName: string) =>
